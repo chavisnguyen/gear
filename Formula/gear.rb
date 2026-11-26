@@ -13,23 +13,23 @@ class Gear < Formula
 
   on_macos do
     on_arm do
-      url "https://github.com/chavisnguyen/gear/releases/download/v0.2.2/gear-darwin-arm64.tar.gz"
-      sha256 "7df5cd3cad95f4c023a1a54f402a3d4dd59e38d5760230e08a04ee572492baa4"
+      url "https://github.com/chavisnguyen/gear/releases/download/v0.2.3/gear-darwin-arm64.tar.gz"
+      sha256 "16fe141a26f65fba0bba44ef2de812da9921a9cca8dc5d3a17509ee384a7a4e5"
     end
     on_intel do
-      url "https://github.com/chavisnguyen/gear/releases/download/v0.2.2/gear-darwin-amd64.tar.gz"
-      sha256 "58cb9cb70e15f1acd6f699178f3b30121ff31d87e14a27da132bc48afb5abd54"
+      url "https://github.com/chavisnguyen/gear/releases/download/v0.2.3/gear-darwin-amd64.tar.gz"
+      sha256 "cbc52669ba93d6c4d342cceacce68def375159925e47e3e997768c725e98cb41"
     end
   end
 
   on_linux do
     on_arm do
-      url "https://github.com/chavisnguyen/gear/releases/download/v0.2.2/gear-linux-arm64.tar.gz"
-      sha256 "e49250b0dc4e6515a09f39c0b237390202ddda6f37a0a713b99b7a4d87f2aeca"
+      url "https://github.com/chavisnguyen/gear/releases/download/v0.2.3/gear-linux-arm64.tar.gz"
+      sha256 "4d6d321ee92fa2485b481805d8c43d007ea77045184a0cc8fb428c1051efb90f"
     end
     on_intel do
-      url "https://github.com/chavisnguyen/gear/releases/download/v0.2.2/gear-linux-amd64.tar.gz"
-      sha256 "e5d04146cdcae19bbece076f3e53951d6fb8c4ae96fcb5d6a4082333104cd59e"
+      url "https://github.com/chavisnguyen/gear/releases/download/v0.2.3/gear-linux-amd64.tar.gz"
+      sha256 "d002577c115dfcb4fe84fc57d9b4c4c2b3627caf3eb6cdf58c5c3dac0d3c1ad2"
     end
   end
 
