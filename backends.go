@@ -38,6 +38,7 @@ func githubToken() string {
 
 type systemSnapshot struct {
 	brewVersions map[string]string
+	brewServices map[string]string
 	brewTaps     map[string]bool
 	npmVersions  map[string]string
 	uvVersions   map[string]string
@@ -57,6 +58,7 @@ func probeSystem(declared map[string]string) *systemSnapshot {
 	}
 	s := &systemSnapshot{
 		brewVersions: map[string]string{},
+		brewServices: map[string]string{},
 		brewTaps:     map[string]bool{},
 		npmVersions:  map[string]string{},
 		uvVersions:   map[string]string{},
@@ -64,6 +66,9 @@ func probeSystem(declared map[string]string) *systemSnapshot {
 	if needBrew {
 		if out, err := brewOutput("list", "--formula", "--versions"); err == nil {
 			s.brewVersions = parseBrewVersions(out)
+		}
+		if out, err := brewOutput("services", "list"); err == nil {
+			s.brewServices = parseBrewServices(out)
 		}
 		if out, err := brewOutput("tap"); err == nil {
 			for _, line := range strings.Split(out, "\n") {
@@ -101,6 +106,34 @@ func (s *systemSnapshot) installedVersion(sp Spec) string {
 		return s.uvVersions[strings.ToLower(sp.Package)]
 	}
 	return ""
+}
+
+func (s *systemSnapshot) brewService(sp Spec) (string, bool) {
+	if sp.Backend != "brew" {
+		return "", false
+	}
+	bt, err := parseBrewTarget(sp.Package)
+	if err != nil {
+		return "", false
+	}
+	st, ok := s.brewServices[strings.ToLower(bt.ShortName)]
+	return st, ok
+}
+
+func parseBrewServices(out string) map[string]string {
+	res := map[string]string{}
+	for _, line := range strings.Split(out, "\n") {
+		fields := strings.Fields(line)
+		if len(fields) < 2 {
+			continue
+		}
+		name := strings.ToLower(fields[0])
+		if name == "name" && strings.EqualFold(fields[1], "status") {
+			continue
+		}
+		res[name] = strings.ToLower(fields[1])
+	}
+	return res
 }
 
 func parseBrewVersions(out string) map[string]string {
@@ -192,13 +225,28 @@ func applySpec(sp Spec, alreadyInstalled, force bool, snap *systemSnapshot) erro
 				}
 			}
 		}
+		var errInstall error
 		if force && alreadyInstalled {
-			return runBrew("reinstall", bt.FormulaRef)
+			errInstall = runBrew("reinstall", bt.FormulaRef)
+		} else if alreadyInstalled {
+			errInstall = runBrew("upgrade", bt.FormulaRef)
+		} else {
+			errInstall = runBrew("install", bt.FormulaRef)
 		}
-		if alreadyInstalled {
-			return runBrew("upgrade", bt.FormulaRef)
+		if errInstall != nil {
+			return errInstall
 		}
-		return runBrew("install", bt.FormulaRef)
+		// Refresh brew services list so newly installed formulae with a service block are detected.
+		if out, err := brewOutput("services", "list"); err == nil {
+			snap.brewServices = parseBrewServices(out)
+		}
+		if svc, hasSvc := snap.brewServices[strings.ToLower(bt.ShortName)]; hasSvc {
+			if alreadyInstalled && (svc == "started" || svc == "scheduled" || force) {
+				return runBrew("services", "restart", bt.FormulaRef)
+			}
+			return runBrew("services", "start", bt.FormulaRef)
+		}
+		return nil
 
 	case "npm":
 		if _, err := exec.LookPath("npm"); err != nil {

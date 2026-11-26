@@ -85,10 +85,14 @@ func cmdDoctor() int {
 			issues++
 			driftCount++
 			fmt.Printf("  🟡 TOOL        %s drift (installed %s, declared %s) -> run `gear install %s`\n", name, inst, sp.Version, name)
+		} else if svc, hasSvc := snap.brewService(sp); hasSvc && svc != "started" && svc != "scheduled" {
+			issues++
+			driftCount++
+			fmt.Printf("  🟡 SERVICE     %s is installed (%s) but service is %s -> run `gear install %s`\n", name, inst, svc, name)
 		}
 	}
 	if driftCount == 0 && len(m.Tools) > 0 {
-		fmt.Printf("  🟢 TOOLS       all %d tool(s) installed via native package managers\n", len(m.Tools))
+		fmt.Printf("  🟢 TOOLS       all %d tool(s) installed & background services running\n", len(m.Tools))
 	}
 
 	if issues > 0 {

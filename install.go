@@ -58,8 +58,31 @@ func cmdInstall(args []string) int {
 		}
 
 		instVer := snap.installedVersion(sp)
+		svc, hasSvc := snap.brewService(sp)
+		svcHealthy := !hasSvc || svc == "started" || svc == "scheduled"
+
 		if !force && instVer != "" && (sp.Version == "" || versionsMatch(instVer, sp.Version)) {
-			fmt.Printf("  = %-18s %s (%s)\n", name, instVer, sp.Backend)
+			if svcHealthy {
+				if hasSvc {
+					fmt.Printf("  = %-18s %s (%s, running)\n", name, instVer, sp.Backend)
+				} else {
+					fmt.Printf("  = %-18s %s (%s)\n", name, instVer, sp.Backend)
+				}
+				continue
+			}
+			// Version matches, but brew service is stopped or in error -> start/restart it!
+			bt, _ := parseBrewTarget(sp.Package)
+			svcVerb := "start"
+			if svc == "error" {
+				svcVerb = "restart"
+			}
+			fmt.Printf("  ▶ %-18s starting background service (%s)...\n", name, bt.FormulaRef)
+			if err := runBrew("services", svcVerb, bt.FormulaRef); err != nil {
+				fmt.Fprintf(os.Stderr, "  ! %-18s service %s FAILED: %v\n", name, svcVerb, err)
+				failures++
+				continue
+			}
+			fmt.Printf("  + %-18s %s (running)\n", name, instVer)
 			continue
 		}
 

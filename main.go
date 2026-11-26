@@ -9,7 +9,7 @@ import (
 	"strings"
 )
 
-const Version = "0.2.0"
+const Version = "0.2.1"
 
 const usage = `gear - declarative multi-device CLI tool hub over brew, npm, and uv.
 
@@ -160,7 +160,18 @@ func cmdStatus() int {
 		status := "○ not installed"
 		if instVer != "" {
 			if sp.Version == "" || versionsMatch(instVer, sp.Version) {
-				status = "✓ ok"
+				if svc, hasSvc := snap.brewService(sp); hasSvc {
+					switch svc {
+					case "started", "scheduled":
+						status = "✓ ok (running)"
+					case "error":
+						status = "✗ service error (run `gear install --force " + n + "`)"
+					default:
+						status = "⚠ service stopped (run `gear install " + n + "`)"
+					}
+				} else {
+					status = "✓ ok"
+				}
 			} else {
 				status = fmt.Sprintf("↻ drift (%s != %s, run `gear install`)", instVer, sp.Version)
 			}

@@ -58,6 +58,12 @@ func TestVersionParsers(t *testing.T) {
 	if uv["mcp-jenkins"] != "3.6.0" || uv["gdown"] != "6.4.0" {
 		t.Fatalf("parseUVToolList = %+v", uv)
 	}
+
+	svcOut := "Name      Status  User   File\nfimake    started chavis ~/Library/LaunchAgents/sh.brew.fimake.plist\nwame      none\nklik      error   chavis ~/Library/LaunchAgents/sh.brew.klik.plist\n"
+	sv := parseBrewServices(svcOut)
+	if sv["fimake"] != "started" || sv["wame"] != "none" || sv["klik"] != "error" || len(sv) != 3 {
+		t.Fatalf("parseBrewServices = %+v", sv)
+	}
 }
 
 func TestInitAndSaveManifest(t *testing.T) {
