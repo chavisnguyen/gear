@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"os"
 	"os/exec"
@@ -22,8 +23,17 @@ import (
 var (
 	ghTokenOnce sync.Once
 	ghTokenVal  string
-	httpClient  = &http.Client{Timeout: 2 * time.Minute}
-	githubAPI   = "https://api.github.com"
+	httpClient  = &http.Client{
+		Timeout: 20 * time.Minute,
+		Transport: &http.Transport{
+			Proxy:                 http.ProxyFromEnvironment,
+			DialContext:           (&net.Dialer{Timeout: 15 * time.Second, KeepAlive: 30 * time.Second}).DialContext,
+			TLSHandshakeTimeout:   15 * time.Second,
+			ResponseHeaderTimeout: 30 * time.Second,
+			IdleConnTimeout:       90 * time.Second,
+		},
+	}
+	githubAPI = "https://api.github.com"
 )
 
 func githubToken() string {
@@ -565,16 +575,17 @@ func installNPM(sp Spec) (InstalledTool, LockedTool, error) {
 		return InstalledTool{}, LockedTool{}, fmt.Errorf("npm install %s: %v\n%s", pkgSpec, err, strings.TrimSpace(string(out)))
 	}
 	npmBin := filepath.Join(destDir, "node_modules", ".bin")
-	entries, err := os.ReadDir(npmBin)
-	if err != nil || len(entries) == 0 {
-		return InstalledTool{}, LockedTool{}, fmt.Errorf("npm package %s exposed no CLI binaries in node_modules/.bin", sp.Package)
-	}
-	var targets []string
-	for _, e := range entries {
-		if strings.HasPrefix(e.Name(), ".") {
-			continue
+	targets := resolvePackageJSONBins(destDir, sp.Package, npmBin)
+	if len(targets) == 0 {
+		entries, err := os.ReadDir(npmBin)
+		if err != nil || len(entries) == 0 {
+			return InstalledTool{}, LockedTool{}, fmt.Errorf("npm package %s exposed no CLI binaries in node_modules/.bin", sp.Package)
 		}
-		targets = append(targets, filepath.Join(npmBin, e.Name()))
+		for _, e := range entries {
+			if !strings.HasPrefix(e.Name(), ".") {
+				targets = append(targets, filepath.Join(npmBin, e.Name()))
+			}
+		}
 	}
 	linked, err := linkBinaries(targets)
 	if err != nil {
@@ -591,6 +602,42 @@ func installNPM(sp Spec) (InstalledTool, LockedTool, error) {
 			Package: sp.Package,
 			Version: sp.Version,
 		}, nil
+}
+
+func resolvePackageJSONBins(destDir, pkgName, npmBin string) []string {
+	pkgJSONPath := filepath.Join(destDir, "node_modules", filepath.FromSlash(pkgName), "package.json")
+	b, err := os.ReadFile(pkgJSONPath)
+	if err != nil {
+		return nil
+	}
+	var doc struct {
+		Name string `json:"name"`
+		Bin  any    `json:"bin"`
+	}
+	if err := json.Unmarshal(b, &doc); err != nil || doc.Bin == nil {
+		return nil
+	}
+	var names []string
+	switch v := doc.Bin.(type) {
+	case string:
+		base := pkgName
+		if i := strings.LastIndex(base, "/"); i >= 0 {
+			base = base[i+1:]
+		}
+		names = append(names, base)
+	case map[string]any:
+		for k := range v {
+			names = append(names, k)
+		}
+	}
+	var out []string
+	for _, n := range names {
+		cand := filepath.Join(npmBin, n)
+		if exists(cand) {
+			out = append(out, cand)
+		}
+	}
+	return out
 }
 
 // ---------------------------------------------------------------- uv backend

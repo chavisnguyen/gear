@@ -9,7 +9,7 @@ import (
 	"strings"
 )
 
-const Version = "0.1.0"
+const Version = "0.1.1"
 
 const usage = `gear - lightweight multi-device tool & version hub.
 
