@@ -9,30 +9,28 @@ import (
 	"strings"
 )
 
-const Version = "0.1.1"
+const Version = "0.2.0"
 
-const usage = `gear - lightweight multi-device tool & version hub.
+const usage = `gear - declarative multi-device CLI tool hub over brew, npm, and uv.
 
 Quick start
   1. gear init [git-url]          create ~/.gear/config/gears.toml (or clone your config repo)
-  2. gear add github:owner/repo   pin & install a tool into ~/.gear/bin
-  3. gear install                 install/sync every tool to its pinned version
+  2. gear add brew:owner/repo     add & install a tool via Homebrew, npm -g, or uv tool
+  3. gear install                 install/upgrade every tool to match gears.toml
 
 Commands
   gear status                     show declared vs installed versions (default when configured)
-  gear install [name...]          install or switch tools to match gears.toml (alias: sync, up)
-  gear add [name] <spec>          add & install a tool (github:owner/repo[@ver], npm:pkg[@ver], uv:pkg[@ver])
-  gear rm <name...>               remove tool(s) from gears.toml and unlink binaries
+  gear install [name...]          install missing tools & upgrade outdated ones (alias: sync, up)
+  gear add [name] <spec>          add & install a tool (brew:..., npm:..., uv:...)
+  gear rm [--uninstall] <name...> remove tool(s) from gears.toml (optionally uninstall from system)
   gear upgrade [name...]          upgrade tool(s) to latest upstream release & update gears.toml
   gear init [git-url]             initialize ~/.gear/config or clone/pull from a git repository
   gear pull                       git pull ~/.gear/config and run gear install
-  gear push [message]             commit & push gears.toml + gears.lock in ~/.gear/config
-  gear doctor                     check PATH, tool health, broken links, and config state
-  gear path                       print ~/.gear/bin
+  gear push [message]             commit & push gears.toml in ~/.gear/config
+  gear doctor                     check package managers, config git sync, and version drift
   gear version                    print version
 
-Flags for install:  --force (reinstall even if version matches)
-Env:  GEAR_HOME (default ~/.gear), GEAR_CONFIG (path to gears.toml), GITHUB_TOKEN / GH_TOKEN
+Env:  GEAR_HOME (default ~/.gear), GEAR_CONFIG (path to gears.toml)
 `
 
 func main() {
@@ -60,9 +58,6 @@ func run(args []string) int {
 	case "-v", "--version", "version":
 		fmt.Printf("gear v%s\n", Version)
 		return 0
-	case "path":
-		fmt.Println(binDir())
-		return 0
 	case "init":
 		return cmdInit(rest)
 	case "status", "list", "ls":
@@ -86,17 +81,17 @@ func run(args []string) int {
 	return 2
 }
 
-const defaultManifestTemplate = `# gears.toml - every CLI/tool you use across machines, pinned in one place.
+const defaultManifestTemplate = `# gears.toml - every CLI tool you use across machines, declared once.
 # Backends:
-#   github:owner/repo@version    prebuilt binary from GitHub Releases
-#   npm:package@version          isolated npm CLI linked into ~/.gear/bin
-#   uv:package@version           isolated Python CLI via uv linked into ~/.gear/bin
+#   brew:owner/repo/formula[@ver]   Homebrew tap + formula (or brew:formula[@ver] from homebrew/core)
+#   npm:package[@ver]               Global npm CLI (npm install -g)
+#   uv:package[@ver]                Isolated Python CLI (uv tool install)
 
 [tools]
-# mcps          = "github:chavisnguyen/mcps@0.5.2"
-# agys          = "github:chavisnguyen/agys@1.0.18"
-# klik          = "github:chavisnguyen/klik@3.1.0"
-# agent-desktop = "npm:agent-desktop@0.2.0"
+# mcps          = "brew:chavisnguyen/mcps/mcps@0.5.3"
+# agys          = "brew:chavisnguyen/agys/agys@1.0.19"
+# klik          = "brew:chavisnguyen/klik/klik@3.2.0"
+# agent-desktop = "brew:agent-desktop@1.3.1"
 `
 
 func cmdInit(args []string) int {
@@ -109,9 +104,7 @@ func cmdInit(args []string) int {
 		if err := writeAtomic(p, []byte(defaultManifestTemplate), 0o644); err != nil {
 			return fail(err)
 		}
-		_ = os.MkdirAll(binDir(), 0o755)
 		fmt.Println("created", tilde(p))
-		printPathHint()
 		return 0
 	}
 	if len(args) != 1 {
@@ -131,9 +124,7 @@ func cmdInit(args []string) int {
 	if err := c.Run(); err != nil {
 		return fail(fmt.Errorf("git: %w", err))
 	}
-	_ = os.MkdirAll(binDir(), 0o755)
 	fmt.Println("config ready:", tilde(dir))
-	printPathHint()
 	return 0
 }
 
@@ -142,11 +133,11 @@ func cmdStatus() int {
 	if err != nil {
 		return fail(err)
 	}
-	st := loadState()
 	if len(m.Tools) == 0 {
-		fmt.Printf("No tools declared in %s\nRun `gear add <backend>:<pkg>` to add one.\n", tilde(manifestPath()))
+		fmt.Printf("No tools declared in %s\nRun `gear add <brew|npm|uv>:<pkg>` to add one.\n", tilde(manifestPath()))
 		return 0
 	}
+	snap := probeSystem(m.Tools)
 	names := sortedKeys(m.Tools)
 	wName, wSpec, wVer := 4, 6, 9
 	type row struct {
@@ -161,21 +152,25 @@ func cmdStatus() int {
 			continue
 		}
 		src := sp.Backend + ":" + sp.Package
-		inst, ok := st.Installed[n]
-		instVer := "-"
+		decl := sp.Version
+		if decl == "" {
+			decl = "any"
+		}
+		instVer := snap.installedVersion(sp)
 		status := "○ not installed"
-		if ok && binariesExist(inst.Bins) {
-			instVer = inst.Version
-			if normalizeVer(inst.Version) == normalizeVer(sp.Version) && inst.Backend == sp.Backend && inst.Package == sp.Package {
+		if instVer != "" {
+			if sp.Version == "" || versionsMatch(instVer, sp.Version) {
 				status = "✓ ok"
 			} else {
-				status = "↻ drift (run `gear install`)"
+				status = fmt.Sprintf("↻ drift (%s != %s, run `gear install`)", instVer, sp.Version)
 			}
+		} else {
+			instVer = "-"
 		}
 		wName = max(wName, len(n))
 		wSpec = max(wSpec, len(src))
-		wVer = max(wVer, max(len(sp.Version), len(instVer)))
-		rows = append(rows, row{n, src, sp.Version, instVer, status})
+		wVer = max(wVer, max(len(decl), len(instVer)))
+		rows = append(rows, row{n, src, decl, instVer, status})
 	}
 	fmt.Printf("  %-*s  %-*s  %-*s  %-*s  %s\n", wName, "TOOL", wSpec, "SOURCE", wVer, "DECLARED", wVer, "INSTALLED", "STATUS")
 	for _, r := range rows {
@@ -186,7 +181,7 @@ func cmdStatus() int {
 
 func cmdAdd(args []string) int {
 	if len(args) < 1 || len(args) > 2 {
-		return fail(fmt.Errorf("usage: gear add [name] <github:owner/repo[@ver] | npm:pkg[@ver] | uv:pkg[@ver]>"))
+		return fail(fmt.Errorf("usage: gear add [name] <brew:pkg[@ver] | npm:pkg[@ver] | uv:pkg[@ver]>"))
 	}
 	var name, raw string
 	if len(args) == 1 {
@@ -224,29 +219,37 @@ func cmdAdd(args []string) int {
 }
 
 func cmdRemove(args []string) int {
-	if len(args) == 0 {
-		return fail(fmt.Errorf("usage: gear rm <name...>"))
+	uninstall := false
+	var names []string
+	for _, a := range args {
+		if a == "--uninstall" || a == "-u" {
+			uninstall = true
+		} else {
+			names = append(names, a)
+		}
+	}
+	if len(names) == 0 {
+		return fail(fmt.Errorf("usage: gear rm [--uninstall] <name...>"))
 	}
 	m, err := loadManifest()
 	if err != nil {
 		return fail(err)
 	}
-	lk := loadLock()
-	st := loadState()
-	for _, name := range args {
+	for _, name := range names {
+		raw, had := m.Tools[name]
 		delete(m.Tools, name)
-		delete(lk.Tools, name)
-		if inst, ok := st.Installed[name]; ok {
-			removeInstalled(inst)
-			delete(st.Installed, name)
+		if uninstall && had {
+			if sp, err := parseSpec(name, raw); err == nil {
+				if err := uninstallSpec(sp); err != nil {
+					fmt.Fprintf(os.Stderr, "  ! uninstall %s: %v\n", name, err)
+				}
+			}
 		}
 		fmt.Printf("- removed %s\n", name)
 	}
 	if err := saveManifest(m); err != nil {
 		return fail(err)
 	}
-	_ = saveLock(lk)
-	_ = saveState(st)
 	return 0
 }
 
@@ -275,11 +278,11 @@ func cmdUpgrade(args []string) int {
 			continue
 		}
 		latest = normalizeVer(latest)
-		if normalizeVer(sp.Version) == latest {
-			fmt.Printf("  = %-16s %s (up to date)\n", name, sp.Version)
+		if sp.Version != "" && versionsMatch(sp.Version, latest) {
+			fmt.Printf("  = %-18s %s (up to date)\n", name, sp.Version)
 			continue
 		}
-		fmt.Printf("  ↑ %-16s %s -> %s\n", name, sp.Version, latest)
+		fmt.Printf("  ↑ %-18s %s -> %s\n", name, sp.Version, latest)
 		sp.Version = latest
 		m.Tools[name] = sp.Format()
 		upgraded = append(upgraded, name)
@@ -315,7 +318,7 @@ func cmdPush(args []string) int {
 	if len(args) > 0 {
 		msg = strings.Join(args, " ")
 	}
-	add := exec.Command("git", "-C", dir, "add", "gears.toml", "gears.lock")
+	add := exec.Command("git", "-C", dir, "add", "gears.toml")
 	_ = add.Run()
 	diff := exec.Command("git", "-C", dir, "diff", "--cached", "--quiet")
 	if diff.Run() != nil {

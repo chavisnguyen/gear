@@ -1,7 +1,6 @@
 package main
 
 import (
-	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -34,14 +33,7 @@ func manifestPath() string {
 	return filepath.Join(configDir(), "gears.toml")
 }
 
-func lockPath() string {
-	return filepath.Join(filepath.Dir(manifestPath()), "gears.lock")
-}
-
-func statePath() string    { return filepath.Join(gearHome(), "state.json") }
-func binDir() string       { return filepath.Join(gearHome(), "bin") }
-func packagesDir() string  { return filepath.Join(gearHome(), "packages") }
-func platformKey() string  { return runtime.GOOS + "-" + runtime.GOARCH }
+func platformKey() string { return runtime.GOOS + "-" + runtime.GOARCH }
 
 func exists(p string) bool {
 	_, err := os.Lstat(p)
@@ -104,7 +96,7 @@ func parseManifestBytes(b []byte, label string) (*Manifest, error) {
 	if t, ok := raw["tools"]; ok {
 		sub, ok := t.(map[string]any)
 		if !ok {
-			return nil, fmt.Errorf("%s: [tools] must be a table", label)
+			return nil, fmt.Errorf("%s: [tools] must be a table", label, )
 		}
 		for k, v := range sub {
 			s, ok := v.(string)
@@ -122,7 +114,6 @@ func parseManifestBytes(b []byte, label string) (*Manifest, error) {
 		}
 		return m, nil
 	}
-	// Also accept flat top-level `name = "backend:pkg@ver"` files.
 	for k, v := range raw {
 		s, ok := v.(string)
 		if !ok {
@@ -162,9 +153,9 @@ func saveManifest(m *Manifest) error {
 
 type Spec struct {
 	Name    string
-	Backend string // github | npm | uv
-	Package string // owner/repo or pkg or @scope/pkg
-	Version string // semver without leading "v" (empty = latest before resolve)
+	Backend string // brew | npm | uv
+	Package string // formula or owner/repo/formula or pkg or @scope/pkg
+	Version string // semver without leading "v" (empty = any/latest)
 }
 
 func (s Spec) Format() string {
@@ -175,26 +166,44 @@ func (s Spec) Format() string {
 }
 
 func normalizeVer(v string) string {
-	return strings.TrimPrefix(strings.TrimSpace(v), "v")
+	v = strings.TrimSpace(v)
+	v = strings.TrimPrefix(v, "v")
+	// Strip Homebrew revision suffix like "1.3.1_1" when comparing base semver if needed.
+	return v
+}
+
+func versionsMatch(installed, declared string) bool {
+	a := normalizeVer(installed)
+	b := normalizeVer(declared)
+	if a == b {
+		return true
+	}
+	// Homebrew revisions look like "1.3.1_1" for upstream "1.3.1"
+	if base, _, ok := strings.Cut(a, "_"); ok && base == b {
+		return true
+	}
+	return false
 }
 
 func parseSpec(name, raw string) (Spec, error) {
 	raw = strings.TrimSpace(raw)
 	backend, rest, ok := strings.Cut(raw, ":")
 	if !ok || rest == "" {
-		return Spec{}, fmt.Errorf("%s: invalid spec %q (expected <github|npm|uv>:<package>@<version>)", name, raw)
+		return Spec{}, fmt.Errorf("%s: invalid spec %q (expected <brew|npm|uv>:<package>[@<version>])", name, raw)
 	}
 	switch backend {
-	case "github", "npm", "uv":
+	case "brew", "npm", "uv":
 	default:
-		return Spec{}, fmt.Errorf("%s: unsupported backend %q (supported: github, npm, uv)", name, backend)
+		return Spec{}, fmt.Errorf("%s: unsupported backend %q (supported: brew, npm, uv)", name, backend)
 	}
 	pkg, ver := splitPkgVersion(rest)
 	if pkg == "" {
 		return Spec{}, fmt.Errorf("%s: empty package in %q", name, raw)
 	}
-	if backend == "github" && strings.Count(pkg, "/") != 1 {
-		return Spec{}, fmt.Errorf("%s: github spec must be github:owner/repo[@version], got %q", name, raw)
+	if backend == "brew" {
+		if _, err := parseBrewTarget(pkg); err != nil {
+			return Spec{}, fmt.Errorf("%s: %w", name, err)
+		}
 	}
 	return Spec{
 		Name:    name,
@@ -216,7 +225,7 @@ func splitPkgVersion(s string) (pkg, ver string) {
 func inferName(raw string) (string, error) {
 	_, rest, ok := strings.Cut(strings.TrimSpace(raw), ":")
 	if !ok || rest == "" {
-		return "", fmt.Errorf("invalid spec %q (expected <github|npm|uv>:<package>[@version])", raw)
+		return "", fmt.Errorf("invalid spec %q (expected <brew|npm|uv>:<package>[@version])", raw)
 	}
 	pkg, _ := splitPkgVersion(rest)
 	if i := strings.LastIndex(pkg, "/"); i >= 0 {
@@ -229,74 +238,56 @@ func inferName(raw string) (string, error) {
 	return pkg, nil
 }
 
-// ---------------------------------------------------------------- lockfile
-
-type PlatformAsset struct {
-	Asset  string `toml:"asset,omitempty"`
-	URL    string `toml:"url"`
-	SHA256 string `toml:"sha256"`
+// BrewTarget resolves "agent-desktop", "chavisnguyen/klik", or "chavisnguyen/FiMake/fimake".
+type BrewTarget struct {
+	TapName    string // e.g. "chavisnguyen/fimake" (empty for homebrew/core)
+	TapURL     string // e.g. "https://github.com/chavisnguyen/FiMake" (empty if standard tap or core)
+	GitHubRepo string // e.g. "chavisnguyen/FiMake" (empty for core)
+	FormulaRef string // e.g. "chavisnguyen/fimake/fimake" or "agent-desktop"
+	ShortName  string // e.g. "fimake" or "agent-desktop"
 }
 
-type LockedTool struct {
-	Backend   string                   `toml:"backend"`
-	Package   string                   `toml:"package"`
-	Version   string                   `toml:"version"`
-	Platforms map[string]PlatformAsset `toml:"platforms,omitempty"`
-}
-
-type Lockfile struct {
-	Tools map[string]LockedTool `toml:"tools"`
-}
-
-func loadLock() *Lockfile {
-	lk := &Lockfile{Tools: map[string]LockedTool{}}
-	if b, err := os.ReadFile(lockPath()); err == nil {
-		_, _ = toml.Decode(string(b), lk)
-		if lk.Tools == nil {
-			lk.Tools = map[string]LockedTool{}
+func parseBrewTarget(pkg string) (BrewTarget, error) {
+	parts := strings.Split(strings.TrimSpace(pkg), "/")
+	switch len(parts) {
+	case 1:
+		if parts[0] == "" {
+			return BrewTarget{}, fmt.Errorf("empty brew formula")
 		}
-	}
-	return lk
-}
-
-func saveLock(lk *Lockfile) error {
-	var b strings.Builder
-	b.WriteString("# gears.lock - auto-generated by gear. Commit this file to lock checksums across machines.\n\n")
-	if err := toml.NewEncoder(&b).Encode(lk); err != nil {
-		return err
-	}
-	return writeAtomic(lockPath(), []byte(b.String()), 0o644)
-}
-
-// ------------------------------------------------------------------- state
-
-type InstalledTool struct {
-	Backend string   `json:"backend"`
-	Package string   `json:"package"`
-	Version string   `json:"version"`
-	Dir     string   `json:"dir"`
-	Bins    []string `json:"bins"`
-}
-
-type State struct {
-	Installed map[string]InstalledTool `json:"installed"`
-}
-
-func loadState() *State {
-	s := &State{Installed: map[string]InstalledTool{}}
-	if b, err := os.ReadFile(statePath()); err == nil {
-		_ = json.Unmarshal(b, s)
-		if s.Installed == nil {
-			s.Installed = map[string]InstalledTool{}
+		return BrewTarget{
+			FormulaRef: parts[0],
+			ShortName:  parts[0],
+		}, nil
+	case 2:
+		owner, repo := parts[0], parts[1]
+		if owner == "" || repo == "" {
+			return BrewTarget{}, fmt.Errorf("invalid brew spec %q", pkg)
 		}
+		tapRepo := strings.TrimPrefix(strings.ToLower(repo), "homebrew-")
+		tapName := strings.ToLower(owner) + "/" + tapRepo
+		formula := tapRepo
+		return BrewTarget{
+			TapName:    tapName,
+			TapURL:     fmt.Sprintf("https://github.com/%s/%s", owner, repo),
+			GitHubRepo: owner + "/" + repo,
+			FormulaRef: tapName + "/" + formula,
+			ShortName:  formula,
+		}, nil
+	case 3:
+		owner, repo, formula := parts[0], parts[1], parts[2]
+		if owner == "" || repo == "" || formula == "" {
+			return BrewTarget{}, fmt.Errorf("invalid brew spec %q", pkg)
+		}
+		tapRepo := strings.TrimPrefix(strings.ToLower(repo), "homebrew-")
+		tapName := strings.ToLower(owner) + "/" + tapRepo
+		return BrewTarget{
+			TapName:    tapName,
+			TapURL:     fmt.Sprintf("https://github.com/%s/%s", owner, repo),
+			GitHubRepo: owner + "/" + repo,
+			FormulaRef: tapName + "/" + formula,
+			ShortName:  formula,
+		}, nil
+	default:
+		return BrewTarget{}, fmt.Errorf("invalid brew spec %q (expected formula or owner/repo[/formula])", pkg)
 	}
-	return s
-}
-
-func saveState(s *State) error {
-	b, err := json.MarshalIndent(s, "", "  ")
-	if err != nil {
-		return err
-	}
-	return writeAtomic(statePath(), append(b, '\n'), 0o644)
 }

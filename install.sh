@@ -2,7 +2,7 @@
 set -euo pipefail
 
 REPO="chavisnguyen/gear"
-INSTALL_DIR="${GEAR_INSTALL_DIR:-$HOME/.gear/bin}"
+INSTALL_DIR="${GEAR_INSTALL_DIR:-$HOME/.local/bin}"
 
 OS="$(uname -s | tr '[:upper:]' '[:lower:]')"
 ARCH="$(uname -m)"
