@@ -9,7 +9,7 @@ import (
 	"strings"
 )
 
-const Version = "0.2.1"
+const Version = "0.2.2"
 
 const usage = `gear - declarative multi-device CLI tool hub over brew, npm, and uv.
 
@@ -38,7 +38,7 @@ func main() {
 }
 
 func fail(err error) int {
-	fmt.Fprintln(os.Stderr, "error:", err)
+	fmt.Fprintln(os.Stderr, red("error:"), err)
 	return 1
 }
 
@@ -139,53 +139,81 @@ func cmdStatus() int {
 	}
 	snap := probeSystem(m.Tools)
 	names := sortedKeys(m.Tools)
-	wName, wSpec, wVer := 4, 6, 9
+	wName, wSpec, wDecl, wInst := 4, 6, 8, 9
 	type row struct {
 		name, source, declared, installed, state string
 	}
 	var rows []row
+	okCount := 0
 	for _, n := range names {
 		raw := m.Tools[n]
 		sp, err := parseSpec(n, raw)
 		if err != nil {
-			rows = append(rows, row{n, raw, "?", "-", "! invalid spec"})
+			rows = append(rows, row{bold(n), raw, yellow("?"), dim("-"), red("✗ invalid spec")})
+			wName = max(wName, len(n))
+			wSpec = max(wSpec, len(raw))
 			continue
 		}
-		src := sp.Backend + ":" + sp.Package
+		plainSrc := sp.Backend + ":" + sp.Package
+		colSrc := formatSource(sp.Backend, sp.Package)
 		decl := sp.Version
 		if decl == "" {
 			decl = "any"
 		}
-		instVer := snap.installedVersion(sp)
-		status := "○ not installed"
-		if instVer != "" {
-			if sp.Version == "" || versionsMatch(instVer, sp.Version) {
+		instRaw := snap.installedVersion(sp)
+		var colInst, status string
+		if instRaw != "" {
+			if sp.Version == "" || versionsMatch(instRaw, sp.Version) {
+				colInst = green(instRaw)
 				if svc, hasSvc := snap.brewService(sp); hasSvc {
 					switch svc {
 					case "started", "scheduled":
-						status = "✓ ok (running)"
+						okCount++
+						status = green("● ok") + " " + cyan("(running)")
 					case "error":
-						status = "✗ service error (run `gear install --force " + n + "`)"
+						status = red("✗ service error") + " " + dim("(run `gear install --force "+n+"`)")
 					default:
-						status = "⚠ service stopped (run `gear install " + n + "`)"
+						status = yellow("⚠ service stopped") + " " + dim("(run `gear install "+n+"`)")
 					}
 				} else {
-					status = "✓ ok"
+					okCount++
+					status = green("● ok")
 				}
 			} else {
-				status = fmt.Sprintf("↻ drift (%s != %s, run `gear install`)", instVer, sp.Version)
+				colInst = yellow(instRaw)
+				status = yellow(fmt.Sprintf("↻ drift (%s → %s)", instRaw, sp.Version)) + " " + dim("run `gear install`")
 			}
 		} else {
-			instVer = "-"
+			instRaw = "-"
+			colInst = dim("-")
+			status = dim("○ not installed")
 		}
 		wName = max(wName, len(n))
-		wSpec = max(wSpec, len(src))
-		wVer = max(wVer, max(len(decl), len(instVer)))
-		rows = append(rows, row{n, src, decl, instVer, status})
+		wSpec = max(wSpec, len(plainSrc))
+		wDecl = max(wDecl, len(decl))
+		wInst = max(wInst, len(instRaw))
+		rows = append(rows, row{bold(n), colSrc, dim(decl), colInst, status})
 	}
-	fmt.Printf("  %-*s  %-*s  %-*s  %-*s  %s\n", wName, "TOOL", wSpec, "SOURCE", wVer, "DECLARED", wVer, "INSTALLED", "STATUS")
+
+	totalWidth := wName + wSpec + wDecl + wInst + 24
+	fmt.Printf("%s %s\n", bold(cyan("⚙  GEAR STATUS")), dim(fmt.Sprintf("(%d/%d ready)", okCount, len(rows))))
+	fmt.Printf("  %s\n", dim(strings.Repeat("─", totalWidth)))
+	fmt.Printf("  %s  %s  %s  %s  %s\n",
+		bold(pad("TOOL", wName)),
+		bold(pad("SOURCE", wSpec)),
+		bold(pad("DECLARED", wDecl)),
+		bold(pad("INSTALLED", wInst)),
+		bold("STATUS"),
+	)
+	fmt.Printf("  %s\n", dim(strings.Repeat("─", totalWidth)))
 	for _, r := range rows {
-		fmt.Printf("  %-*s  %-*s  %-*s  %-*s  %s\n", wName, r.name, wSpec, r.source, wVer, r.declared, wVer, r.installed, r.state)
+		fmt.Printf("  %s  %s  %s  %s  %s\n",
+			pad(r.name, wName),
+			pad(r.source, wSpec),
+			pad(r.declared, wDecl),
+			pad(r.installed, wInst),
+			r.state,
+		)
 	}
 	return 0
 }
@@ -225,7 +253,7 @@ func cmdAdd(args []string) int {
 	if err := saveManifest(m); err != nil {
 		return fail(err)
 	}
-	fmt.Printf("+ saved %s = %q in %s\n", name, sp.Format(), tilde(manifestPath()))
+	fmt.Printf("%s saved %s = %s in %s\n", green("+"), bold(name), cyan(fmt.Sprintf("%q", sp.Format())), dim(tilde(manifestPath())))
 	return cmdInstall([]string{name})
 }
 
@@ -256,7 +284,7 @@ func cmdRemove(args []string) int {
 				}
 			}
 		}
-		fmt.Printf("- removed %s\n", name)
+		fmt.Printf("%s removed %s\n", yellow("-"), bold(name))
 	}
 	if err := saveManifest(m); err != nil {
 		return fail(err)
@@ -290,10 +318,10 @@ func cmdUpgrade(args []string) int {
 		}
 		latest = normalizeVer(latest)
 		if sp.Version != "" && versionsMatch(sp.Version, latest) {
-			fmt.Printf("  = %-18s %s (up to date)\n", name, sp.Version)
+			fmt.Printf("  %s %-18s %s %s\n", green("="), bold(name), green(sp.Version), dim("(up to date)"))
 			continue
 		}
-		fmt.Printf("  ↑ %-18s %s -> %s\n", name, sp.Version, latest)
+		fmt.Printf("  %s %-18s %s -> %s\n", cyan("↑"), bold(name), yellow(sp.Version), green(latest))
 		sp.Version = latest
 		m.Tools[name] = sp.Format()
 		upgraded = append(upgraded, name)

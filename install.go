@@ -64,9 +64,9 @@ func cmdInstall(args []string) int {
 		if !force && instVer != "" && (sp.Version == "" || versionsMatch(instVer, sp.Version)) {
 			if svcHealthy {
 				if hasSvc {
-					fmt.Printf("  = %-18s %s (%s, running)\n", name, instVer, sp.Backend)
+					fmt.Printf("  %s %s  %s %s\n", green("="), pad(bold(name), 18), green(instVer), cyan("("+sp.Backend+", running)"))
 				} else {
-					fmt.Printf("  = %-18s %s (%s)\n", name, instVer, sp.Backend)
+					fmt.Printf("  %s %s  %s %s\n", green("="), pad(bold(name), 18), green(instVer), dim("("+sp.Backend+")"))
 				}
 				continue
 			}
@@ -76,32 +76,32 @@ func cmdInstall(args []string) int {
 			if svc == "error" {
 				svcVerb = "restart"
 			}
-			fmt.Printf("  ▶ %-18s starting background service (%s)...\n", name, bt.FormulaRef)
+			fmt.Printf("  %s %s  starting background service (%s)...\n", cyan("▶"), pad(bold(name), 18), dim(bt.FormulaRef))
 			if err := runBrew("services", svcVerb, bt.FormulaRef); err != nil {
-				fmt.Fprintf(os.Stderr, "  ! %-18s service %s FAILED: %v\n", name, svcVerb, err)
+				fmt.Fprintf(os.Stderr, "  %s %s  service %s FAILED: %v\n", red("✗"), pad(bold(name), 18), svcVerb, err)
 				failures++
 				continue
 			}
-			fmt.Printf("  + %-18s %s (running)\n", name, instVer)
+			fmt.Printf("  %s %s  %s %s\n", green("+"), pad(bold(name), 18), green(instVer), cyan("(running)"))
 			continue
 		}
 
 		action := "installing"
 		if instVer != "" {
-			action = fmt.Sprintf("updating %s ->", instVer)
+			action = fmt.Sprintf("updating %s →", yellow(instVer))
 		}
 		targetLabel := sp.Version
 		if targetLabel == "" {
 			targetLabel = "latest"
 		}
-		fmt.Printf("  ↓ %-18s %s %s (%s:%s)...\n", name, action, targetLabel, sp.Backend, sp.Package)
+		fmt.Printf("  %s %s  %s %s (%s)...\n", cyan("↓"), pad(bold(name), 18), action, green(targetLabel), formatSource(sp.Backend, sp.Package))
 
 		if err := applySpec(sp, instVer != "", force, snap); err != nil {
-			fmt.Fprintf(os.Stderr, "  ! %-18s FAILED: %v\n", name, err)
+			fmt.Fprintf(os.Stderr, "  %s %s  %s %v\n", red("✗"), pad(bold(name), 18), red("FAILED:"), err)
 			failures++
 			continue
 		}
-		fmt.Printf("  + %-18s ok (%s)\n", name, sp.Backend)
+		fmt.Printf("  %s %s  %s\n", green("+"), pad(bold(name), 18), green("ok ("+sp.Backend+")"))
 	}
 
 	if manifestDirty {
