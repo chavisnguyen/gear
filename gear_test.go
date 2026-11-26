@@ -10,9 +10,12 @@ func TestParseSpecAndBrewTarget(t *testing.T) {
 		name, raw               string
 		wantBackend, wantPkg, v string
 	}{
-		{"agys", "brew:chavisnguyen/agys/agys@v1.0.19", "brew", "chavisnguyen/agys/agys", "1.0.19"},
-		{"fimake", "brew:chavisnguyen/FiMake/fimake@1.0.43", "brew", "chavisnguyen/FiMake/fimake", "1.0.43"},
-		{"agent-desktop", "brew:agent-desktop@1.3.1", "brew", "agent-desktop", "1.3.1"},
+		{"agys", "brew:chavisnguyen/agys/agys", "brew", "chavisnguyen/agys/agys", ""},
+		{"legacy-tap", "brew:chavisnguyen/agys/agys@v1.0.19", "brew", "chavisnguyen/agys/agys", ""},
+		{"fimake", "brew:chavisnguyen/FiMake/fimake@1.0.43", "brew", "chavisnguyen/FiMake/fimake", ""},
+		{"agent-desktop", "brew:agent-desktop@1.3.1", "brew", "agent-desktop", ""},
+		{"node20", "brew:node@20", "brew", "node@20", ""},
+		{"py312", "brew:python@3.12", "brew", "python@3.12", ""},
 		{"mobile-mcp", "npm:@mobilenext/mobile-mcp@1.0.20", "npm", "@mobilenext/mobile-mcp", "1.0.20"},
 		{"jenkins", "uv:mcp-jenkins@3.6.0", "uv", "mcp-jenkins", "3.6.0"},
 	}
@@ -73,14 +76,14 @@ func TestInitAndSaveManifest(t *testing.T) {
 		t.Fatalf("gear init failed: %d", code)
 	}
 	m := &Manifest{Tools: map[string]string{
-		"klik": "brew:chavisnguyen/klik/klik@3.2.0",
-		"agys": "brew:chavisnguyen/agys/agys@1.0.19",
+		"klik": "brew:chavisnguyen/klik/klik",
+		"agys": "brew:chavisnguyen/agys/agys",
 	}}
 	if err := saveManifest(m); err != nil {
 		t.Fatal(err)
 	}
 	loaded, err := loadManifest()
-	if err != nil || len(loaded.Tools) != 2 || loaded.Tools["klik"] != "brew:chavisnguyen/klik/klik@3.2.0" {
+	if err != nil || len(loaded.Tools) != 2 || loaded.Tools["klik"] != "brew:chavisnguyen/klik/klik" {
 		t.Fatalf("loaded = %+v, err = %v (from %s)", loaded, err, filepath.Join(tmp, "config/gears.toml"))
 	}
 }

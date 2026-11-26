@@ -80,12 +80,16 @@ func probeSystem(declared map[string]string) *systemSnapshot {
 		}
 	}
 	if needNPM {
-		if out, err := exec.Command("npm", "list", "-g", "--depth=0", "--json").Output(); err == nil {
+		cmd := exec.Command("npm", "list", "-g", "--depth=0", "--json")
+		cmd.Env = append(os.Environ(), "NO_COLOR=1")
+		if out, err := cmd.Output(); err == nil {
 			s.npmVersions = parseNPMListJSON(out)
 		}
 	}
 	if needUV {
-		if out, err := exec.Command("uv", "tool", "list").Output(); err == nil {
+		cmd := exec.Command("uv", "tool", "list")
+		cmd.Env = append(os.Environ(), "NO_COLOR=1")
+		if out, err := cmd.Output(); err == nil {
 			s.uvVersions = parseUVToolList(string(out))
 		}
 	}
@@ -199,6 +203,18 @@ func runBrew(args ...string) error {
 	return cmd.Run()
 }
 
+func refreshBrewTap(bt BrewTarget, snap *systemSnapshot) {
+	if bt.TapName == "" || snap == nil || !snap.brewTaps[strings.ToLower(bt.TapName)] {
+		return
+	}
+	if repoDir, err := brewOutput("--repository", bt.TapName); err == nil {
+		dir := strings.TrimSpace(repoDir)
+		if dir != "" {
+			_ = exec.Command("git", "-C", dir, "pull", "--ff-only").Run()
+		}
+	}
+}
+
 func applySpec(sp Spec, alreadyInstalled, force bool, snap *systemSnapshot) error {
 	switch sp.Backend {
 	case "brew":
@@ -216,13 +232,7 @@ func applySpec(sp Spec, alreadyInstalled, force bool, snap *systemSnapshot) erro
 				}
 				snap.brewTaps[strings.ToLower(bt.TapName)] = true
 			} else if alreadyInstalled {
-				// Fast-forward just this tap repo so brew sees the new Formula version immediately.
-				if repoDir, err := brewOutput("--repository", bt.TapName); err == nil {
-					dir := strings.TrimSpace(repoDir)
-					if dir != "" {
-						_ = exec.Command("git", "-C", dir, "pull", "--ff-only").Run()
-					}
-				}
+				refreshBrewTap(bt, snap)
 			}
 		}
 		var errInstall error
@@ -304,26 +314,24 @@ func resolveLatestVersion(sp Spec) (string, error) {
 		if err != nil {
 			return "", err
 		}
+		if out, err := brewOutput("info", "--json=v2", bt.FormulaRef); err == nil {
+			var doc struct {
+				Formulae []struct {
+					Versions struct {
+						Stable string `json:"stable"`
+					} `json:"versions"`
+				} `json:"formulae"`
+			}
+			if json.Unmarshal([]byte(out), &doc) == nil && len(doc.Formulae) > 0 && doc.Formulae[0].Versions.Stable != "" {
+				return normalizeVer(doc.Formulae[0].Versions.Stable), nil
+			}
+		}
 		if bt.GitHubRepo != "" {
 			if v, err := fetchLatestGitHubTag(bt.GitHubRepo); err == nil && v != "" {
 				return v, nil
 			}
 		}
-		out, err := brewOutput("info", "--json=v2", bt.FormulaRef)
-		if err != nil {
-			return "", fmt.Errorf("brew info %s: %w", bt.FormulaRef, err)
-		}
-		var doc struct {
-			Formulae []struct {
-				Versions struct {
-					Stable string `json:"stable"`
-				} `json:"versions"`
-			} `json:"formulae"`
-		}
-		if err := json.Unmarshal([]byte(out), &doc); err != nil || len(doc.Formulae) == 0 {
-			return "", fmt.Errorf("could not parse brew version for %s", bt.FormulaRef)
-		}
-		return normalizeVer(doc.Formulae[0].Versions.Stable), nil
+		return "", fmt.Errorf("could not resolve brew version for %s", bt.FormulaRef)
 
 	case "npm":
 		out, err := exec.Command("npm", "view", sp.Package, "version").Output()

@@ -45,7 +45,7 @@ func cmdInstall(args []string) int {
 			failures++
 			continue
 		}
-		if sp.Version == "latest" {
+		if sp.Backend != "brew" && sp.Version == "latest" {
 			v, err := resolveLatestVersion(sp)
 			if err != nil {
 				fmt.Fprintf(os.Stderr, "  ! %-18s resolve version: %v\n", name, err)

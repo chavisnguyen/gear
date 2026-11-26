@@ -201,6 +201,20 @@ func parseSpec(name, raw string) (Spec, error) {
 		return Spec{}, fmt.Errorf("%s: empty package in %q", name, raw)
 	}
 	if backend == "brew" {
+		// Homebrew manages formula versions natively; never pin @semver on brew specs.
+		// Preserve Homebrew core versioned formula names like "node@20" or "python@3.12",
+		// while stripping legacy semver pins like "cmob@0.2.5" or "@v1.0.0" or "@latest".
+		if ver != "" {
+			_, rawVer := splitPkgVersion(rest)
+			isLegacyPin := strings.Contains(pkg, "/") ||
+				ver == "latest" ||
+				strings.HasPrefix(strings.TrimSpace(rawVer), "v") ||
+				strings.Count(ver, ".") >= 2
+			if !isLegacyPin {
+				pkg = rest
+			}
+			ver = ""
+		}
 		if _, err := parseBrewTarget(pkg); err != nil {
 			return Spec{}, fmt.Errorf("%s: %w", name, err)
 		}

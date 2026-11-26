@@ -9,7 +9,7 @@ import (
 	"strings"
 )
 
-const Version = "0.2.2"
+const Version = "0.2.3"
 
 const usage = `gear - declarative multi-device CLI tool hub over brew, npm, and uv.
 
@@ -83,15 +83,16 @@ func run(args []string) int {
 
 const defaultManifestTemplate = `# gears.toml - every CLI tool you use across machines, declared once.
 # Backends:
-#   brew:owner/repo/formula[@ver]   Homebrew tap + formula (or brew:formula[@ver] from homebrew/core)
-#   npm:package[@ver]               Global npm CLI (npm install -g)
-#   uv:package[@ver]                Isolated Python CLI (uv tool install)
+#   brew:owner/repo/formula   Homebrew tap + formula (version managed by brew)
+#   brew:formula              Homebrew core formula (version managed by brew)
+#   npm:package[@ver]         Global npm CLI (npm install -g)
+#   uv:package[@ver]          Isolated Python CLI (uv tool install)
 
 [tools]
-# mcps          = "brew:chavisnguyen/mcps/mcps@0.5.3"
-# agys          = "brew:chavisnguyen/agys/agys@1.0.19"
-# klik          = "brew:chavisnguyen/klik/klik@3.2.0"
-# agent-desktop = "brew:agent-desktop@1.3.1"
+# mcps          = "brew:chavisnguyen/mcps/mcps"
+# agys          = "brew:chavisnguyen/agys/agys"
+# klik          = "brew:chavisnguyen/klik/klik"
+# agent-desktop = "brew:agent-desktop"
 `
 
 func cmdInit(args []string) int {
@@ -157,7 +158,9 @@ func cmdStatus() int {
 		plainSrc := sp.Backend + ":" + sp.Package
 		colSrc := formatSource(sp.Backend, sp.Package)
 		decl := sp.Version
-		if decl == "" {
+		if sp.Backend == "brew" {
+			decl = "brew"
+		} else if decl == "" {
 			decl = "any"
 		}
 		instRaw := snap.installedVersion(sp)
@@ -237,7 +240,7 @@ func cmdAdd(args []string) int {
 	if err != nil {
 		return fail(err)
 	}
-	if sp.Version == "" || sp.Version == "latest" {
+	if sp.Backend != "brew" && (sp.Version == "" || sp.Version == "latest") {
 		fmt.Printf("→ resolving latest version for %s:%s...\n", sp.Backend, sp.Package)
 		v, err := resolveLatestVersion(sp)
 		if err != nil {
@@ -301,7 +304,11 @@ func cmdUpgrade(args []string) int {
 	if len(targets) == 0 {
 		targets = sortedKeys(m.Tools)
 	}
-	var upgraded []string
+	snap := probeSystem(m.Tools)
+	var pinnedUpgrades []string
+	manifestDirty := false
+	failures := 0
+
 	for _, name := range targets {
 		raw, ok := m.Tools[name]
 		if !ok {
@@ -311,6 +318,38 @@ func cmdUpgrade(args []string) int {
 		if err != nil {
 			return fail(err)
 		}
+		if sp.Backend == "brew" {
+			// Ensure manifest strips any legacy @version pin on brew entries.
+			if m.Tools[name] != sp.Format() {
+				m.Tools[name] = sp.Format()
+				manifestDirty = true
+			}
+			bt, _ := parseBrewTarget(sp.Package)
+			refreshBrewTap(bt, snap)
+			latest, err := resolveLatestVersion(sp)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "  ! %s: could not check latest: %v\n", name, err)
+				continue
+			}
+			latest = normalizeVer(latest)
+			instVer := snap.installedVersion(sp)
+			if instVer != "" && versionsMatch(instVer, latest) {
+				fmt.Printf("  %s %-18s %s %s\n", green("="), bold(name), green(instVer), dim("(brew, up to date)"))
+				continue
+			}
+			fromLabel := instVer
+			if fromLabel == "" {
+				fromLabel = "none"
+			}
+			fmt.Printf("  %s %-18s %s -> %s %s\n", cyan("↑"), bold(name), yellow(fromLabel), green(latest), dim("(brew)"))
+			if err := applySpec(sp, instVer != "", false, snap); err != nil {
+				fmt.Fprintf(os.Stderr, "  %s %-18s %s %v\n", red("✗"), bold(name), red("FAILED:"), err)
+				failures++
+				continue
+			}
+			continue
+		}
+
 		latest, err := resolveLatestVersion(sp)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "  ! %s: could not check latest: %v\n", name, err)
@@ -324,15 +363,23 @@ func cmdUpgrade(args []string) int {
 		fmt.Printf("  %s %-18s %s -> %s\n", cyan("↑"), bold(name), yellow(sp.Version), green(latest))
 		sp.Version = latest
 		m.Tools[name] = sp.Format()
-		upgraded = append(upgraded, name)
+		manifestDirty = true
+		pinnedUpgrades = append(pinnedUpgrades, name)
 	}
-	if len(upgraded) == 0 {
-		return 0
+	if manifestDirty {
+		if err := saveManifest(m); err != nil {
+			return fail(err)
+		}
 	}
-	if err := saveManifest(m); err != nil {
-		return fail(err)
+	if len(pinnedUpgrades) > 0 {
+		if code := cmdInstall(pinnedUpgrades); code != 0 {
+			return code
+		}
 	}
-	return cmdInstall(upgraded)
+	if failures > 0 {
+		return 1
+	}
+	return 0
 }
 
 func cmdPull() int {

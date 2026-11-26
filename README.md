@@ -28,16 +28,16 @@ gear init git@github.com:you/gear-config.git           # or sync from a private 
 
 ```toml
 [tools]
-mcps          = "brew:chavisnguyen/mcps/mcps@0.5.3"
-agys          = "brew:chavisnguyen/agys/agys@1.0.19"
-klik          = "brew:chavisnguyen/klik/klik@3.2.0"
-wame          = "brew:chavisnguyen/wame/wame@2.2.0"
-agent-desktop = "brew:agent-desktop@1.3.1"
+mcps          = "brew:chavisnguyen/mcps/mcps"
+agys          = "brew:chavisnguyen/agys/agys"
+klik          = "brew:chavisnguyen/klik/klik"
+wame          = "brew:chavisnguyen/wame/wame"
+agent-desktop = "brew:agent-desktop"
 mobile-mcp    = "npm:@mobilenext/mobile-mcp@1.0.20"
 mcp-jenkins   = "uv:mcp-jenkins@3.6.0"
 ```
 
-Or add from the terminal (resolves & pins latest version automatically if `@version` is omitted):
+Or add from the terminal (`brew:` versions are managed natively by Homebrew; `npm:` and `uv:` pin the latest version automatically if `@version` is omitted):
 
 ```bash
 gear add brew:chavisnguyen/agys/agys
@@ -56,7 +56,7 @@ gear install
 
 | Prefix | Example | What `gear` runs |
 | :--- | :--- | :--- |
-| `brew:` | `brew:chavisnguyen/klik/klik@3.2.0`<br>`brew:agent-desktop@1.3.1` | Auto-taps `https://github.com/<owner>/<repo>` if needed, then runs `brew install` / `brew upgrade` |
+| `brew:` | `brew:chavisnguyen/klik/klik`<br>`brew:agent-desktop` | Auto-taps `https://github.com/<owner>/<repo>` if needed, delegates version management to `brew` (`brew install` / `brew upgrade`), and manages `brew services` |
 | `npm:` | `npm:@mobilenext/mobile-mcp@1.0.20` | `npm install -g <pkg>@<version>` |
 | `uv:` | `uv:mcp-jenkins@3.6.0` | `uv tool install <pkg>==<version>` |
 
